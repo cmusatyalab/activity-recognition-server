@@ -2,11 +2,15 @@
 
 from activity_recognition_engine import ActivityRecognitionEngine
 from gabriel_server.local_engine import runner
+import logging
 
 
 INPUT_QUEUE_MAXSIZE = 60
 PORT = 9099
 TOKENS = 2
+
+
+logging.basicConfig(level=logging.INFO)
 
 
 def main():

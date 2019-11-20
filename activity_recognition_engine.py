@@ -29,4 +29,4 @@ class ActivityRecognitionEngine(cognitive_engine.Engine):
         for frame_number in range(NUM_INPUT_FRAMES):
              cur_img = reader.get_data(frame_number)
 
-             cv2.imencode("{}.jpg".format(frame_number), cur_img)
+             cv2.imwrite("{}.jpg".format(frame_number), cur_img)
