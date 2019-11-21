@@ -34,8 +34,7 @@ class ActivityRecognitionEngine(cognitive_engine.Engine):
             "frozen_inference_graph.pb")
         self.obj_detector = obj.Object_Detector(obj_detection_graph)
 
-        self.act_detector = act.Action_Detector(
-            'soft_attn', timesteps=NUM_INPUT_FRAMES)
+        self.act_detector = act.Action_Detector('soft_attn')
         crop_in_tubes = self.act_detector.crop_tubes_in_tf(
             [t, HEIGHT, WIDTH, 3])
         (self.input_frames, self.temporal_rois, self.temporal_roi_batch_indices,
@@ -67,7 +66,7 @@ class ActivityRecognitionEngine(cognitive_engine.Engine):
 
         detection_list = self.run_obj_detector(expanded_img)
 
-        self.tracker = obj.Tracker(timesteps=NUM_INPUT_FRAMES)
+        self.tracker = obj.Tracker()
         self.update_tracker(img_batch, detection_list)
         num_actors = len(self.tracker.active_actors)
         act_result = self.run_act_detector(num_actors)
@@ -85,13 +84,11 @@ class ActivityRecognitionEngine(cognitive_engine.Engine):
             self.tracker.update_tracker(detection_info, cur_img)
 
     def run_act_detector(self, num_actors):
-        assert len(self.tracker.frame_history) >= self.tracker.timesteps, (
-            'Tracker was not run on all {} frames'.format(self.tracker.timesteps))
         if not self.tracker.active_actors:
             logger.info('No active actors')
             return
 
-        cur_input_sequence = np.expand_dims(np.stack(self.tracker.frame_history[-self.tracker.timesteps:], axis=0), axis=0)
+        cur_input_sequence = np.expand_dims(np.stack(self.tracker.frame_history[-NUM_INPUT_FRAMES:], axis=0), axis=0)
 
         rois_np, temporal_rois_np = tracker.generate_all_rois()
         if num_actors > MAX_ACTORS:
