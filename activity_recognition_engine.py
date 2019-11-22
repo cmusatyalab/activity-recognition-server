@@ -1,10 +1,8 @@
 import numpy as np
 import cv2
-import queue
 import imageio
 import logging
 import os
-from multiprocessing import Process, Queue
 from gabriel_server import cognitive_engine
 from gabriel_protocol import gabriel_pb2
 
@@ -17,7 +15,7 @@ WIDTH = 640
 HEIGHT = 480
 OBJ_DETECTION_MODEL = 'ssd_mobilenet_v2_coco_2018_03_29'
 CKPT_NAME = 'model_ckpt_soft_attn_pooled_cosine_drop_ava-130'
-MAIN_FILDER = './'
+MAIN_FOLDER = './'
 MAX_ACTORS = 14
 PRINT_TOP_K = 5
 
@@ -34,19 +32,19 @@ class ActivityRecognitionEngine(cognitive_engine.Engine):
             "frozen_inference_graph.pb")
         self.obj_detector = obj.Object_Detector(obj_detection_graph)
 
-        self.act_detector = act.Action_Detector('soft_attn')
+        self.act_detector = act.Action_Detector(
+            'soft_attn', timesteps=NUM_INPUT_FRAMES)
         crop_in_tubes = self.act_detector.crop_tubes_in_tf(
-            [t, HEIGHT, WIDTH, 3])
+            [NUM_INPUT_FRAMES, HEIGHT, WIDTH, 3])
         (self.input_frames, self.temporal_rois, self.temporal_roi_batch_indices,
          self.cropped_frames) = crop_in_tubes
         self.rois, self.roi_batch_indices, self.pred_probs = (
             self.act_detector.define_inference_with_placeholders_noinput(
-                cropped_frames))
+                self.cropped_frames))
 
         ckpt_path = os.path.join(
             MAIN_FOLDER, 'action_detection', 'weights', CKPT_NAME)
         self.act_detector.restore_model(ckpt_path)
-        self.prob_dict = {}
 
     def handle(self, from_client):
         if from_client.payload_type != gabriel_pb2.PayloadType.VIDEO:
@@ -66,11 +64,11 @@ class ActivityRecognitionEngine(cognitive_engine.Engine):
 
         detection_list = self.run_obj_detector(expanded_img)
 
-        self.tracker = obj.Tracker()
+        self.tracker = obj.Tracker(timesteps=NUM_INPUT_FRAMES)
         self.update_tracker(img_batch, detection_list)
         num_actors = len(self.tracker.active_actors)
-        act_result = self.run_act_detector(num_actors)
-        self.print_results(act_results, num_actors)
+        act_results = self.run_act_detector(num_actors)
+        prob_dict = self.print_results_and_build_prob_dict(act_results, num_actors)
 
         return gabriel_pb2.ResultWrapper()
 
@@ -79,7 +77,7 @@ class ActivityRecognitionEngine(cognitive_engine.Engine):
 
     def update_tracker(self, img_batch, detection_list):
         for frame_number in range(NUM_INPUT_FRAMES):
-            cur_img = img_batch(frame_number)
+            cur_img = img_batch[frame_number]
             detection_info = [info[frame_number] for info in detection_list]
             self.tracker.update_tracker(detection_info, cur_img)
 
@@ -90,7 +88,7 @@ class ActivityRecognitionEngine(cognitive_engine.Engine):
 
         cur_input_sequence = np.expand_dims(np.stack(self.tracker.frame_history[-NUM_INPUT_FRAMES:], axis=0), axis=0)
 
-        rois_np, temporal_rois_np = tracker.generate_all_rois()
+        rois_np, temporal_rois_np = self.tracker.generate_all_rois()
         if num_actors > MAX_ACTORS:
             num_actors = MAX_ACTORS
             rois_np = rois_np[:MAX_ACTORS]
@@ -107,14 +105,17 @@ class ActivityRecognitionEngine(cognitive_engine.Engine):
 
         return self.act_detector.session.run(run_dict, feed_dict=feed_dict)
 
-    def print_results(self, act_results, num_actors):
+    def print_results_and_build_prob_dict(self, act_results, num_actors):
+        prob_dict = {}
         for bounding_box in range(num_actors):
-            act_probs = out_dict['pred_probs'][bounding_box]
+            act_probs = act_results['pred_probs'][bounding_box]
             order = np.argsort(act_probs)[::-1]
-            cur_actor_id = tracker.active_actors[bounding_box]['actor_id']
+            cur_actor_id = self.tracker.active_actors[bounding_box]['actor_id']
             print('Person', cur_actor_id)
             cur_results = []
-            for pp in range(print_top_k):
+            for pp in range(PRINT_TOP_K):
                 print('\t %s: %.3f' % (act.ACTION_STRINGS[order[pp]], act_probs[order[pp]]))
                 cur_results.append((act.ACTION_STRINGS[order[pp]], act_probs[order[pp]]))
-            self.prob_dict[cur_actor_id] = cur_results
+            prob_dict[cur_actor_id] = cur_results
+
+        return prob_dict
