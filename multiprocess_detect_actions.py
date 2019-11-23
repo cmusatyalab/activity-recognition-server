@@ -13,7 +13,7 @@ import action_detection.action_detector as act
 from multiprocessing import Process, Queue
 
 import time
-SHOW_CAMS = True
+SHOW_CAMS = False
 
 # Object classes
 CAM_CLASSES = ["read", "answer phone", "carry", "text on", "drink", "eat"]

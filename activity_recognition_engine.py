@@ -19,6 +19,7 @@ MAIN_FOLDER = './'
 MAX_ACTORS = 14
 PRINT_TOP_K = 5
 ACTION_TH = 0.2
+COMPRESSION_PARAMS = [cv2.IMWRITE_JPEG_QUALITY, 67]
 
 np.random.seed(10)
 # get darker colors for bboxes and use white text
@@ -26,6 +27,18 @@ COLORS = np.random.randint(0, 100, [1000, 3])
 
 
 logger = logging.getLogger(__name__)
+
+
+def gen_text_result(text):
+    result_wrapper = gabriel_pb2.ResultWrapper()
+    
+    result = gabriel_pb2.ResultWrapper.Result()
+    result.payload_type = gabriel_pb2.PayloadType.TEXT
+    result.engine_name = ActivityRecognitionEngine.ENGINE_NAME
+    result.payload = text.encode(encoding="utf-8")
+    
+    result_wrapper.results.append(result)
+    return result_wrapper
 
 
 class ActivityRecognitionEngine(cognitive_engine.Engine):
@@ -72,14 +85,19 @@ class ActivityRecognitionEngine(cognitive_engine.Engine):
         self.tracker = obj.Tracker(timesteps=NUM_INPUT_FRAMES)
         self.update_tracker(img_batch, detection_list)
         num_actors = len(self.tracker.active_actors)
-        act_results = self.run_act_detector(num_actors)
-        prob_dict = self.build_prob_dict(act_results, num_actors)
 
-        out_img = self.gen_outputs(img_batch[-1], prob_dict)
-        cv2.imshow('results', out_img[:,:,::-1])
-        cv2.waitKey(1)
+        if num_actors == 0:
+            logger.info('No active actors')
+            result_wrapper = gen_text_result('No people detected')
+        else:
+            act_results = self.run_act_detector(num_actors)
+            prob_dict = self.build_prob_dict(act_results, num_actors)
+            result_wrapper = self.gen_result_wrapper(img_batch[-1], prob_dict)
 
-        return gabriel_pb2.ResultWrapper()
+        result_wrapper.frame_id = from_client.frame_id
+        result_wrapper.status = gabriel_pb2.ResultWrapper.Status.SUCCESS
+
+        return result_wrapper
 
     def run_obj_detector(self, expanded_img):
         return self.obj_detector.detect_objects_in_np(expanded_img)
@@ -91,10 +109,6 @@ class ActivityRecognitionEngine(cognitive_engine.Engine):
             self.tracker.update_tracker(detection_info, cur_img)
 
     def run_act_detector(self, num_actors):
-        if not self.tracker.active_actors:
-            logger.info('No active actors')
-            return
-
         cur_input_sequence = np.expand_dims(np.stack(self.tracker.frame_history[-NUM_INPUT_FRAMES:], axis=0), axis=0)
 
         rois_np, temporal_rois_np = self.tracker.generate_all_rois()
@@ -129,16 +143,15 @@ class ActivityRecognitionEngine(cognitive_engine.Engine):
 
         return prob_dict
 
-    def gen_outputs(self, disp_img, prob_dict):
+    def gen_result_wrapper(self, disp_img, prob_dict):
         H, W, C = disp_img.shape
 
-        results = []
+        descriptions = []
         for ii in range(len(self.tracker.active_actors)):
             cur_actor = self.tracker.active_actors[ii]
             actor_id = cur_actor['actor_id']
             cur_act_results = prob_dict[actor_id] if actor_id in prob_dict else []
             cur_box = cur_actor['all_boxes'][-1]
-            cur_score = cur_actor['all_scores'][-1]
             cur_class = 1
 
             top, left, bottom, right = cur_box
@@ -149,11 +162,20 @@ class ActivityRecognitionEngine(cognitive_engine.Engine):
             top = int(H * top)
             bottom = int(H * bottom)
 
-            conf = cur_score
-
-            results.append(cur_act_results)
             label = obj.OBJECT_STRINGS[cur_class]['name']
-            message = '{} {}'.format(label.capitalize(), actor_id)
+            person_identifier = '{} {}'.format(label.capitalize(), actor_id)
+
+            results_to_report = [
+                cur_act_result[0] for cur_act_result in cur_act_results
+                if cur_act_result[1] > ACTION_TH
+            ]
+
+            if len(results_to_report) > 0:
+                description = '{} was labeled with the following {} lables: {}.'.format(
+                    person_identifier, len(results_to_report), ', '.join(results_to_report))
+            else:
+                description = 'Found no actions for {}.'.format(person_identifier)
+            descriptions.append(description)
 
             raw_colors = COLORS[actor_id]
             rect_color = tuple(int(raw_color) for raw_color in raw_colors)
@@ -161,9 +183,18 @@ class ActivityRecognitionEngine(cognitive_engine.Engine):
 
             cv2.rectangle(disp_img, (left,top), (right,bottom), rect_color, 3)
 
-            font_size =  max(0.5,(right - left)/50.0/float(len(message)))
+            font_size =  max(0.5,(right - left)/50.0/float(len(person_identifier)))
             cv2.rectangle(disp_img, (left, top-int(font_size*40)), (right,top), rect_color, -1)
-            cv2.putText(disp_img, message, (left, top-12), 0, font_size, text_color, 1)
+            cv2.putText(disp_img, person_identifier, (left, top-12), 0, font_size, text_color, 1)
 
-        print('results', results)
-        return disp_img
+        description = ' '.join(descriptions)
+        result_wrapper = gen_text_result(description)
+        
+        result = gabriel_pb2.ResultWrapper.Result()
+        result.payload_type = gabriel_pb2.PayloadType.IMAGE
+        result.engine_name = ActivityRecognitionEngine.ENGINE_NAME
+        _, jpeg_img = cv2.imencode(".jpg", disp_img, COMPRESSION_PARAMS)
+        result.payload = jpeg_img.tostring()
+        result_wrapper.results.append(result)
+        
+        return result_wrapper
