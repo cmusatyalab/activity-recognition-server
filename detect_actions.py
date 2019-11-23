@@ -12,8 +12,11 @@ import object_detection.object_detector as obj
 import action_detection.action_detector as act
 
 import time
-DISPLAY = False
+
+
 SHOW_CAMS = False
+
+
 def main():
     parser = argparse.ArgumentParser()
 
@@ -23,7 +26,7 @@ def main():
     args = parser.parse_args()
     display = (args.display == "True" or args.display == "true")
     
-    #actor_to_display = 6 # for cams
+    actor_to_display = 6  # for cams
 
     video_path = args.video_path
     basename = os.path.basename(video_path).split('.')[0]

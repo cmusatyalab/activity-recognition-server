@@ -1,7 +1,6 @@
 import numpy as np
 import cv2
 import imageio
-#import tensorflow as tf
 import json
 
 import os
@@ -14,14 +13,12 @@ import action_detection.action_detector as act
 from multiprocessing import Process, Queue
 
 import time
-#SHOW_CAMS = True
-SHOW_CAMS = False
+SHOW_CAMS = True
+
 # Object classes
 CAM_CLASSES = ["read", "answer phone", "carry", "text on", "drink", "eat"]
 # Person state classes
 CAM_CLASSES = ["walk", "stand", "sit", "bend", "run", "talk"]
-
-#USE_WEBCAM = True
 
 ACTION_FREQ = 8
 #OBJ_BATCH_SIZE = 16 # with ssd-mobilenet2
@@ -32,7 +29,7 @@ DELAY = 60 # ms, this limits the input around 16 fps. This makes sense as the ac
 #ACT_GPU = "2"
 #ACT_GPU = "1" # if using nas and/or high res input use different GPUs for each process
 
-T = 32 # Timesteps
+T = 32  # Timesteps
 
 # separate process definitions
 
