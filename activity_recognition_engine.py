@@ -67,13 +67,17 @@ class ActivityRecognitionEngine(cognitive_engine.Engine):
         self.act_detector.restore_model(ckpt_path)
 
     def handle(self, from_client):
+        logger.info('Got result')
         if from_client.payload_type != gabriel_pb2.PayloadType.VIDEO:
             return cognitive_engine.wrong_input_format_error(
                 from_client.frame_id)
 
         reader = imageio.get_reader(from_client.payload, 'ffmpeg')
 
-        assert reader.get_length() > NUM_INPUT_FRAMES, (
+        if reader.get_length() < NUM_INPUT_FRAMES:
+            result_wrapper = gen_text_result('{} Input was only {} frames.'.format(PROJECTOR_PREAMBLE, reader.get_length()))
+        
+        assert reader.get_length() >= NUM_INPUT_FRAMES, (
             'Video only had {} frames'.format(reader.get_length()))
         
         w, h = reader.get_meta_data()['size']
@@ -199,7 +203,9 @@ class ActivityRecognitionEngine(cognitive_engine.Engine):
         result = gabriel_pb2.ResultWrapper.Result()
         result.payload_type = gabriel_pb2.PayloadType.IMAGE
         result.engine_name = ActivityRecognitionEngine.ENGINE_NAME
-        _, jpeg_img = cv2.imencode(".jpg", disp_img, COMPRESSION_PARAMS)
+
+        disp_img_bgr = cv2.cvtColor(disp_img, cv2.COLOR_RGB2BGR)
+        _, jpeg_img = cv2.imencode(".jpg", disp_img_bgr, COMPRESSION_PARAMS)
         result.payload = jpeg_img.tostring()
         result_wrapper.results.append(result)
         
