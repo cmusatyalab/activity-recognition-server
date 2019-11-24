@@ -21,6 +21,8 @@ PRINT_TOP_K = 5
 ACTION_TH = 0.2
 COMPRESSION_PARAMS = [cv2.IMWRITE_JPEG_QUALITY, 67]
 
+PROJECTOR_PREAMBLE = 'Playing extra sound for projector.'
+
 np.random.seed(10)
 # get darker colors for bboxes and use white text
 COLORS = np.random.randint(0, 100, [1000, 3])
@@ -70,6 +72,10 @@ class ActivityRecognitionEngine(cognitive_engine.Engine):
                 from_client.frame_id)
 
         reader = imageio.get_reader(from_client.payload, 'ffmpeg')
+
+        assert reader.get_length() > NUM_INPUT_FRAMES, (
+            'Video only had {} frames'.format(reader.get_length()))
+        
         w, h = reader.get_meta_data()['size']
         assert w == WIDTH, 'Input width was {}'.format(w)
         assert h == HEIGHT, 'Input height was {}'.format(h)
@@ -88,7 +94,7 @@ class ActivityRecognitionEngine(cognitive_engine.Engine):
 
         if num_actors == 0:
             logger.info('No active actors')
-            result_wrapper = gen_text_result('No people detected')
+            result_wrapper = gen_text_result('{} No people detected'.format(PROJECTOR_PREAMBLE))
         else:
             act_results = self.run_act_detector(num_actors)
             prob_dict = self.build_prob_dict(act_results, num_actors)
@@ -188,7 +194,7 @@ class ActivityRecognitionEngine(cognitive_engine.Engine):
             cv2.putText(disp_img, person_identifier, (left, top-12), 0, font_size, text_color, 1)
 
         description = ' '.join(descriptions)
-        result_wrapper = gen_text_result(description)
+        result_wrapper = gen_text_result(PROJECTOR_PREAMBLE + description)
         
         result = gabriel_pb2.ResultWrapper.Result()
         result.payload_type = gabriel_pb2.PayloadType.IMAGE
