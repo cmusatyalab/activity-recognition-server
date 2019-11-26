@@ -3,6 +3,7 @@ import cv2
 import imageio
 import logging
 import os
+import requests
 from gabriel_server import cognitive_engine
 from gabriel_protocol import gabriel_pb2
 
@@ -21,7 +22,10 @@ PRINT_TOP_K = 5
 ACTION_TH = 0.2
 COMPRESSION_PARAMS = [cv2.IMWRITE_JPEG_QUALITY, 67]
 
-PROJECTOR_PREAMBLE = 'Playing extra sound for projector.'
+FACE_URI = ""
+FACE_HEADERS = { "Content-Type": "image/jpeg" }
+
+WAVE_CLAP_TH = 0.0015
 
 np.random.seed(10)
 # get darker colors for bboxes and use white text
@@ -30,6 +34,21 @@ COLORS = np.random.randint(0, 100, [1000, 3])
 
 logger = logging.getLogger(__name__)
 
+
+# Based on https://www.geeksforgeeks.org/find-two-rectangles-overlap/
+def intersect(actor_box, face_box):
+    (left, right, top, bottom) = actor_box
+    (face_left, face_right, face_top, face_bottom) = face_box
+
+    # If one rectangle is on left side of other 
+    if (left > face_right or face_left > right): 
+        return False
+  
+    # If one rectangle is above other 
+    if (bottom < face_top or face_bottom < top):
+        return False
+  
+    return True    
 
 def gen_text_result(text):
     result_wrapper = gabriel_pb2.ResultWrapper()
@@ -75,7 +94,8 @@ class ActivityRecognitionEngine(cognitive_engine.Engine):
         reader = imageio.get_reader(from_client.payload, 'ffmpeg')
 
         if reader.get_length() < NUM_INPUT_FRAMES:
-            result_wrapper = gen_text_result('{} Input was only {} frames.'.format(PROJECTOR_PREAMBLE, reader.get_length()))
+            result_wrapper = gen_text_result('Input was only {} frames.'.format(reader.get_length()))
+            return result_wrapper
         
         assert reader.get_length() >= NUM_INPUT_FRAMES, (
             'Video only had {} frames'.format(reader.get_length()))
@@ -98,17 +118,16 @@ class ActivityRecognitionEngine(cognitive_engine.Engine):
 
         if num_actors == 0:
             logger.info('No active actors')
-            result_wrapper = gen_text_result('{} No people detected'.format(PROJECTOR_PREAMBLE))
+            result_wrapper = gen_text_result('No people detected')
         else:
             act_results = self.run_act_detector(num_actors)
-            prob_dict = self.build_prob_dict(act_results, num_actors)
-            result_wrapper = self.gen_result_wrapper(img_batch[-1], prob_dict)
+            # prob_dict = self.build_prob_dict(act_results, num_actors)
+            result_wrapper = self.gen_result_wrapper(img_batch[-1], act_results)
 
         result_wrapper.frame_id = from_client.frame_id
         result_wrapper.status = gabriel_pb2.ResultWrapper.Status.SUCCESS
 
         return result_wrapper
-
     def run_obj_detector(self, expanded_img):
         return self.obj_detector.detect_objects_in_np(expanded_img)
 
@@ -153,14 +172,21 @@ class ActivityRecognitionEngine(cognitive_engine.Engine):
 
         return prob_dict
 
-    def gen_result_wrapper(self, disp_img, prob_dict):
-        H, W, C = disp_img.shape
+    def gen_result_wrapper(self, disp_img, act_results):
+        H, W, _ = disp_img.shape
+
+        # disp_img_bgr = cv2.cvtColor(disp_img, cv2.COLOR_RGB2BGR)
+        # _, jpeg_img = cv2.imencode(".jpg", disp_img_bgr, COMPRESSION_PARAMS)
+
+        # Based on
+        # https://github.com/Azure-Samples/cognitive-services-containers-samples/blob/master/python/Face/FaceHttp/FaceHttp.py
+        # response = requests.post(FACE_URI, headers=FACE_HEADERS, data=jpeg_img.tostring())
+        # faces = response.json()
 
         descriptions = []
         for ii in range(len(self.tracker.active_actors)):
             cur_actor = self.tracker.active_actors[ii]
             actor_id = cur_actor['actor_id']
-            cur_act_results = prob_dict[actor_id] if actor_id in prob_dict else []
             cur_box = cur_actor['all_boxes'][-1]
             cur_class = 1
 
@@ -174,31 +200,53 @@ class ActivityRecognitionEngine(cognitive_engine.Engine):
 
             label = obj.OBJECT_STRINGS[cur_class]['name']
             person_identifier = '{} {}'.format(label.capitalize(), actor_id)
+            
+            # for face in faces:
+            #     rectangle = face[u'faceRectangle']
+            #     face_height = rectangle[u'height']
+            #     face_left = rectangle[u'left']
+            #     face_top = rectangle[u'top']
+            #     face_width = rectangle[u'width']
 
-            results_to_report = [
-                cur_act_result[0] for cur_act_result in cur_act_results
-                if cur_act_result[1] > ACTION_TH
-            ]
+            #     face_right = face_left + face_width
+            #     face_bottom = face_top + face_height
 
-            if len(results_to_report) > 0:
-                description = '{} was labeled with the following {} lables: {}.'.format(
-                    person_identifier, len(results_to_report), ', '.join(results_to_report))
+            #     if intersect((left, right, top, bottom), (face_left, face_right, face_top, face_bottom)):
+            #         print(person_identifier)
+            #         print(face)
+
+            print('clapping prob', act_results['pred_probs'][ii][48])
+            print('waving prob', act_results['pred_probs'][ii][50])
+            clapping = (act_results['pred_probs'][ii][48] > WAVE_CLAP_TH)
+            waving = (act_results['pred_probs'][ii][50] > WAVE_CLAP_TH)
+
+            if clapping and waving:
+                if act_results['pred_probs'][ii][48] > act_results['pred_probs'][ii][50]:
+                    waving = False
+                else:
+                    clapping = False
+                    
+            if waving:
+                description = '{} was waving.'.format(person_identifier)            
+            elif clapping:
+                description = '{} was clapping.'.format(person_identifier)
             else:
-                description = 'Found no actions for {}.'.format(person_identifier)
+                description = '{} was not clapping or waving.'.format(person_identifier)
+
             descriptions.append(description)
 
             raw_colors = COLORS[actor_id]
             rect_color = tuple(int(raw_color) for raw_color in raw_colors)
             text_color = tuple(255-color_value for color_value in rect_color)
 
-            cv2.rectangle(disp_img, (left,top), (right,bottom), rect_color, 3)
+            cv2.rectangle(disp_img, (left, top), (right, bottom), rect_color, 3)
 
             font_size =  max(0.5,(right - left)/50.0/float(len(person_identifier)))
             cv2.rectangle(disp_img, (left, top-int(font_size*40)), (right,top), rect_color, -1)
             cv2.putText(disp_img, person_identifier, (left, top-12), 0, font_size, text_color, 1)
 
         description = ' '.join(descriptions)
-        result_wrapper = gen_text_result(PROJECTOR_PREAMBLE + description)
+        result_wrapper = gen_text_result(description)
         
         result = gabriel_pb2.ResultWrapper.Result()
         result.payload_type = gabriel_pb2.PayloadType.IMAGE

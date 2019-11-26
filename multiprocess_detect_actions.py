@@ -214,6 +214,9 @@ def run_act_detector(shape, detection_q, actions_q, act_gpu):
             out_dict = act_detector.session.run(run_dict, feed_dict=feed_dict)
             probs = out_dict['pred_probs']
 
+            print('hand clap', probs[0][48])
+            print('hand wave', probs[0][50])
+
             if not SHOW_CAMS:
                 # associate probs with actor ids
                 print_top_k = 5
